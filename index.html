@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Nightly - Generative Diagrams</title>
+  <style>
+    /* Webページ全体をスクロール可能にし、中央揃えにするレイアウト */
+    body {
+      margin: 0;
+      background-color: #fff;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 60px 20px;
+      font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+    }
+    
+    /* メイングラフのラッパー */
+    .main-container {
+      margin-bottom: 60px;
+    }
+
+    /* サブグラフを横並びにするラッパー */
+    .sub-container {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      align-items: center;
+      gap: 60px;
+      margin-bottom: 60px;
+    }
+
+    /* キャンバスの基本設定（線画のシャープさを保つためボーダーは描かない） */
+    canvas {
+      display: block;
+      background-color: #fff;
+    }
+  </style>
+</head>
+<body>
+
+<div class="main-container">
+  <canvas id="mainCanvas"></canvas>
+</div>
+
+<div class="sub-container">
+  <canvas id="subCanvas1"></canvas>
+  <canvas id="subCanvas2"></canvas>
+</div>
+
+<script>
+  // 各キャンバスのコンテキストを取得
+  const mainCanvas = document.getElementById('mainCanvas');
+  const ctxMain = mainCanvas.getContext('2d');
+
+  const subCanvas1 = document.getElementById('subCanvas1');
+  const ctxSub1 = subCanvas1.getContext('2d');
+
+  const subCanvas2 = document.getElementById('subCanvas2');
+  const ctxSub2 = subCanvas2.getContext('2d');
+
+  let time = 0;
+
+  // 画面サイズに合わせて3つのキャンバスのサイズを再計算
+  function resize() {
+    const windowW = window.innerWidth;
+    
+    // 1. メイングラフ（最大幅1000px、比率 3:2）
+    const mainW = Math.min(windowW * 0.9, 1000);
+    const mainH = mainW * 0.6;
+    mainCanvas.width = mainW;
+    mainCanvas.height = mainH;
+
+    // 2. サブグラフ1（メイングラフの40%のサイズ、比率そのまま 3:2）
+    const sub1W = mainW * 0.4;
+    const sub1H = mainH * 0.4;
+    subCanvas1.width = sub1W;
+    subCanvas1.height = sub1H;
+
+    // 3. サブグラフ2（サブグラフ1の縦横を逆転させたもの、比率 2:3）
+    subCanvas2.width = sub1H; // 幅に高さを代入
+    subCanvas2.height = sub1W; // 高さに幅を代入
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  // コサイン補間
+  function cosineInterpolate(y1, y2, mu) {
+    let mu2 = (1 - Math.cos(mu * Math.PI)) / 2;
+    return (y1 * (1 - mu2) + y2 * mu2);
+  }
+
+  // =================================================================
+  // 汎用グラフ描画関数（サイズや比率が違っても自動適応する）
+  // =================================================================
+  function renderGraph(ctx, w, h, t, title) {
+    ctx.clearRect(0, 0, w, h);
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, w, h);
+
+    // キャンバスサイズに応じた余白とフォントサイズの動的計算
+    const padding = Math.max(30, w * 0.05);
+    const gw = w - padding * 2;
+    const gh = h - padding * 2;
+    const ox = padding;
+    const oy = padding;
+
+    // --- 1. グリッドとフレーム ---
+    ctx.fillStyle = '#000';
+    const fontSize = Math.max(7, Math.floor(gw / 60));
+    ctx.font = `${fontSize}px "Helvetica Neue", Helvetica, Arial, sans-serif`;
+
+    // 縦長グラフの場合は縦線の密度を下げる
+    const cols = (gw > gh) ? 20 : 12; 
+    const rows = (gw > gh) ? 15 : 20; 
+    const subDivisions = 5; 
+
+    const xStep = gw / cols; const yStep = gh / rows;
+    const xSubStep = xStep / subDivisions; const ySubStep = yStep / subDivisions;
+
+    ctx.strokeStyle = '#000';
+    ctx.lineWidth = Math.max(0.05, gw / 5000); 
+    for (let x = 0; x <= gw; x += xSubStep) {
+      ctx.beginPath(); ctx.moveTo(ox + x, oy); ctx.lineTo(ox + x, oy + gh); ctx.stroke();
+    }
+    for (let y = 0; y <= gh; y += ySubStep) {
+      ctx.beginPath(); ctx.moveTo(ox, oy + y); ctx.lineTo(ox + gw, oy + y); ctx.stroke();
+    }
+
+    ctx.lineWidth = Math.max(0.15, gw / 3000); 
+    // 横幅が狭い場合は、数字同士の重なりを防ぐため目盛りを飛ばす
+    const labelStepX = (gw < 300) ? 4 : 2;
+    
+    for (let i = 0; i <= cols; i++) {
+      let x = i * xStep;
+      ctx.beginPath(); ctx.moveTo(ox + x, oy); ctx.lineTo(ox + x, oy + gh); ctx.stroke();
+      if (i % labelStepX === 0) {
+        let valX = (i * 0.1).toFixed(2);
+        ctx.fillText(valX, ox + x + 2, oy + gh - 4);
+        ctx.beginPath(); ctx.moveTo(ox + x, oy - 3); ctx.lineTo(ox + x, oy); ctx.stroke();
+      }
+    }
+    for (let i = 0; i <= rows; i++) {
+      let y = i * yStep;
+      ctx.beginPath(); ctx.moveTo(ox, oy + y); ctx.lineTo(ox + gw, oy + y); ctx.stroke();
+      if (i % 2 === 0) {
+        let valY = ((rows - i) * 0.1).toFixed(2);
+        ctx.fillText(valY, ox + 4, oy + y - 4);
+        ctx.beginPath(); ctx.moveTo(ox + gw, oy + y); ctx.lineTo(ox + gw + 3, oy + y); ctx.stroke();
+      }
+    }
+
+    // フレームとタイトル
+    ctx.lineWidth = Math.max(0.5, gw / 1000);
+    ctx.strokeRect(ox, oy, gw, gh);
+
+    ctx.font = `${Math.max(9, fontSize + 2)}px monospace`;
+    ctx.fillText(title, ox, oy - 10);
+    // 縦長で幅が狭い場合は SYS_TIME を非表示にする
+    if (gw > 300) {
+      ctx.fillText("SYS_TIME: " + (t * 0.01).toFixed(3), ox + gw - 130, oy - 10);
+    }
+
+    // --- 2. 線の束（クリッピング） ---
+    ctx.save(); 
+    ctx.beginPath();
+    ctx.rect(ox, oy, gw, gh);
+    ctx.clip(); 
+
+    const numLines = 250; 
+    ctx.lineWidth = Math.max(0.1, gw / 4000); 
+    ctx.strokeStyle = '#000';
+
+    const nodesX = [0, 0.25, 0.40, 0.65, 0.85, 1.0];
+    const cpYNorm = 0.55; 
+    let animateT = t * 0.015; 
+
+    for (let i = 0; i < numLines; i++) {
+      ctx.beginPath();
+      let f = i / (numLines - 1); 
+
+      let targetsY = [];
+      targetsY.push(f * 0.6 + 0.35 + Math.sin(animateT * 0.3 + f * 4) * 0.15); 
+      targetsY.push(Math.round(f * 8) / 8 * 0.4 + 0.45 + Math.cos(animateT * 0.4) * 0.08);
+      targetsY.push(cpYNorm); 
+      targetsY.push((1.0 - f) * 0.7 - 0.05 + Math.sin(animateT * 0.5 - f * 3) * 0.2); 
+      let bundle = Math.round(f * 4) / 4; 
+      let bundleShift = Math.sin(animateT * 0.2 + bundle * 6) * 0.2; 
+      targetsY.push(bundle * 0.5 - 0.15 + bundleShift); 
+      targetsY.push(bundle * 0.6 - 0.2 + (Math.sin(i)*0.03) + Math.cos(animateT * 0.3 + bundle * 4) * 0.25);
+
+      let wave1 = Math.sin(animateT * 1.5 + f * Math.PI * 4 + i * 0.05);
+      let wave2 = Math.cos(animateT * 2.0 - f * Math.PI * 2 + i * 0.02);
+      let combinedMotion = (wave1 + wave2) * 0.08;
+
+      const stepX = Math.max(1, gw / 300); 
+      for (let x = 0; x <= gw; x += stepX) {
+        let nx = x / gw; 
+
+        let segment = 0; let mu = 0; 
+        for (let j = 0; j < nodesX.length - 1; j++) {
+          if (nx >= nodesX[j] && nx <= nodesX[j+1]) {
+            segment = j;
+            mu = (nx - nodesX[j]) / (nodesX[j+1] - nodesX[j]);
+            break;
+          }
+        }
+
+        let base_yNorm = cosineInterpolate(targetsY[segment], targetsY[segment+1], mu);
+        let distCP = Math.abs(nx - nodesX[2]);
+        let dynamicWobble = combinedMotion * Math.pow(distCP, 0.7);
+        let noise = Math.sin(t * 0.1 + i * 13) * 0.005 * distCP;
+
+        let finalYNorm = base_yNorm + dynamicWobble + noise;
+        let y = oy + finalYNorm * gh;
+
+        if (x === 0) ctx.moveTo(ox + x, y); else ctx.lineTo(ox + x, y);
+      }
+      ctx.stroke();
+    }
+    ctx.restore(); 
+
+    // --- 3. 臨界点（黒い点） ---
+    let cpX_pixel = ox + gw * nodesX[2];
+    let cpY_pixel = oy + gh * cpYNorm;
+    ctx.fillStyle = '#000';
+    ctx.beginPath();
+    ctx.arc(cpX_pixel, cpY_pixel, Math.max(1.5, gw / 200), 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // アニメーションループ
+  function animate() {
+    // 3つのキャンバスを同時に描画（Nightlyというテーマに合わせてタイトルを付与）
+    renderGraph(ctxMain, mainCanvas.width, mainCanvas.height, time, "FIG. 1 : NIGHTLY - MAIN OBSERVATION");
+    renderGraph(ctxSub1, subCanvas1.width, subCanvas1.height, time, "FIG. 1.1 : SCALED TOPOLOGY");
+    renderGraph(ctxSub2, subCanvas2.width, subCanvas2.height, time, "FIG. 1.2 : INVERTED PHASE SPACE");
+
+    time++;
+    requestAnimationFrame(animate);
+  }
+
+  animate();
+</script>
+
+</body>
+</html>
